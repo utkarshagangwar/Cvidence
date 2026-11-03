@@ -4,7 +4,8 @@
 
 import type { z } from "zod";
 import { TASK_CREDITS, type TaskId } from "../quota/credits";
-import { JsonRepairError, parseJsonLoose } from "./json-repair";
+import { dropNulls, JsonRepairError, parseJsonLoose } from "./json-repair";
+import type { ProviderHealth } from "./provider-health";
 import { ProviderError, type LlmProvider, type ModelTier, type ProviderName } from "./types";
 
 export interface TaskDef<T> {
@@ -78,9 +79,18 @@ export interface RunTaskDeps {
   log?: (event: Record<string, unknown>) => void;
   /** Injected in tests so the retry wait doesn't slow them down. */
   sleep?: (ms: number) => Promise<void>;
+  /** Skips providers that failed moments ago. Optional so tests stay isolated. */
+  health?: ProviderHealth;
+  /** Total time for one task across all providers and retries. */
+  budgetMs?: number;
 }
 
-const MAX_ATTEMPTS = 2; // first try + one retry on a bad shape
+// First try + retries on a bad reply shape; each retry prefers another provider.
+const attemptsFor = (providerCount: number) => Math.min(3, Math.max(2, providerCount));
+// Wall-clock budget for one task across every provider, kept well under the 300 s
+// server limit. A single call stops when the budget runs out.
+const DEFAULT_BUDGET_MS = 180_000;
+const MIN_CALL_MS = 5_000;
 // When every provider is briefly busy (5xx, timeout, rate limit), wait once and
 // go round again. Auth or blocked errors won't get better, so they don't retry.
 const BUSY_RETRY_MS = 2500;
@@ -101,12 +111,24 @@ export async function runTask<T>(deps: RunTaskDeps, input: RunTaskInput<T>): Pro
     await deps.ledger.refund(reservationId, code, { tokensIn, tokensOut });
   };
 
+  const deadline = Date.now() + (deps.budgetMs ?? DEFAULT_BUDGET_MS);
+  // Providers that sent a reply we couldn't use; the retry tries others first.
+  const avoid = new Set<ProviderName>();
+
   try {
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const reply = await callWithFallback(deps, input, (tin, tout) => {
-        tokensIn += tin;
-        tokensOut += tout;
-      });
+    const maxAttempts = attemptsFor(deps.providers.length);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1 && deadline - Date.now() < MIN_CALL_MS) break;
+      const reply = await callWithFallback(
+        deps,
+        input,
+        (tin, tout) => {
+          tokensIn += tin;
+          tokensOut += tout;
+        },
+        avoid,
+        deadline,
+      );
 
       let parsed: unknown;
       try {
@@ -114,12 +136,14 @@ export async function runTask<T>(deps: RunTaskDeps, input: RunTaskInput<T>): Pro
       } catch (err) {
         if (!(err instanceof JsonRepairError)) throw err;
         deps.log?.({ event: "ai.bad_json", task: task.id, attempt, provider: reply.provider });
+        avoid.add(reply.provider);
         continue;
       }
 
-      const checked = task.schema.safeParse(parsed);
+      const checked = task.schema.safeParse(dropNulls(parsed));
       if (!checked.success) {
         deps.log?.({ event: "ai.schema_invalid", task: task.id, attempt, provider: reply.provider, issues: checked.error.issues.length });
+        avoid.add(reply.provider);
         continue;
       }
 
@@ -160,44 +184,66 @@ export async function runTask<T>(deps: RunTaskDeps, input: RunTaskInput<T>): Pro
   }
 }
 
+/**
+ * Order for this call: healthy providers first (config order), then ones that
+ * just gave a bad reply for this task, then ones cooling down after a failure.
+ * Nothing is dropped, so every configured provider gets a chance.
+ */
+function orderProviders(deps: RunTaskDeps, avoid: ReadonlySet<ProviderName>) {
+  const rank = (p: LlmProvider) => (deps.health?.isCooling(p.name) ? 2 : avoid.has(p.name) ? 1 : 0);
+  return deps.providers.map((p, i) => ({ p, i, r: rank(p) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.p);
+}
+
 async function callWithFallback<T>(
   deps: RunTaskDeps,
   input: RunTaskInput<T>,
   addTokens: (tokensIn: number, tokensOut: number) => void,
+  avoid: ReadonlySet<ProviderName>,
+  deadline: number,
 ) {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let lastError: ProviderError | undefined;
-  for (let round = 0; round < 2; round++) {
+  let queue = orderProviders(deps, avoid);
+
+  for (let round = 0; round < 2 && queue.length > 0; round++) {
     if (round === 1) {
-      if (!lastError || !BUSY_CODES.has(lastError.code)) break;
-      deps.log?.({ event: "ai.busy_retry", task: input.task.id, code: lastError.code });
-      await (deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(BUSY_RETRY_MS);
+      // Second round: only providers that were busy, after a short wait.
+      if (deadline - Date.now() < BUSY_RETRY_MS + MIN_CALL_MS) break;
+      deps.log?.({ event: "ai.busy_retry", task: input.task.id, code: lastError?.code });
+      await sleep(BUSY_RETRY_MS);
     }
-    let stop = false;
-    for (const provider of deps.providers) {
-    try {
-      const reply = await provider.complete({
-        system: input.system,
-        user: input.user,
-        tier: input.task.tier,
-        maxOutputTokens: input.task.maxOutputTokens,
-        temperature: input.task.temperature,
-        json: true,
-        signal: input.signal,
-      });
-      addTokens(reply.tokensIn, reply.tokensOut);
-      return reply;
-    } catch (err) {
-      if (!(err instanceof ProviderError)) throw err;
-      addTokens(err.tokensIn, err.tokensOut);
-      deps.log?.({ event: "ai.provider_error", task: input.task.id, provider: err.provider, code: err.code });
-      lastError = err;
-      if (!err.retryable) {
-        stop = true;
-        break;
+    const busy: LlmProvider[] = [];
+    for (const provider of queue) {
+      if (input.signal?.aborted) throw lastError ?? new ProviderError("Request cancelled", "TIMEOUT", provider.name, false);
+      const remaining = deadline - Date.now();
+      if (remaining < MIN_CALL_MS) break;
+      const budget = AbortSignal.timeout(remaining);
+      try {
+        const reply = await provider.complete({
+          system: input.system,
+          user: input.user,
+          tier: input.task.tier,
+          maxOutputTokens: input.task.maxOutputTokens,
+          temperature: input.task.temperature,
+          json: true,
+          signal: input.signal ? AbortSignal.any([input.signal, budget]) : budget,
+        });
+        addTokens(reply.tokensIn, reply.tokensOut);
+        deps.health?.markOk(provider.name);
+        if (lastError) deps.log?.({ event: "ai.fallback_ok", task: input.task.id, provider: provider.name });
+        return reply;
+      } catch (err) {
+        if (!(err instanceof ProviderError)) throw err;
+        addTokens(err.tokensIn, err.tokensOut);
+        deps.health?.markFailed(err.provider, err.code);
+        deps.log?.({ event: "ai.provider_error", task: input.task.id, provider: err.provider, code: err.code });
+        lastError = err;
+        // Whatever went wrong here (outage, quota, bad key, refusal, odd
+        // reply), the next provider is a separate service and may well work.
+        if (BUSY_CODES.has(err.code)) busy.push(provider);
       }
     }
-    }
-    if (stop) break;
+    queue = busy;
   }
-  throw lastError ?? new ProviderError("No provider answered", "UPSTREAM", "gemini", false);
+  throw lastError ?? new ProviderError("No provider answered in time", "TIMEOUT", deps.providers[0]!.name, false);
 }

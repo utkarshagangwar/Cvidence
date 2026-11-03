@@ -1,6 +1,7 @@
 // AI eval for cover letters, outreach emails and refine. Real model. Opt-in: EVAL=1.
 import { describe, expect, it } from "vitest";
 import { createGeminiProvider } from "@/lib/ai/providers/gemini";
+import { createGrokProvider } from "@/lib/ai/providers/grok";
 import { createOpenRouterProvider } from "@/lib/ai/providers/openrouter";
 import { runTask, type Ledger } from "@/lib/ai/run-task";
 import { COVER_LETTER, coverPrompt, emailPrompt, OUTREACH_EMAIL, REFINE, refinePrompt } from "@/lib/ai/tasks";
@@ -19,6 +20,8 @@ function providers(): LlmProvider[] {
     out.push(createGeminiProvider({ apiKey: e.GEMINI_API_KEY, models: { cheap: e.GEMINI_MODEL_CHEAP, strong: e.GEMINI_MODEL_STRONG } }));
   if (e.OPENROUTER_API_KEY && e.OPENROUTER_MODEL_CHEAP && e.OPENROUTER_MODEL_STRONG)
     out.push(createOpenRouterProvider({ apiKey: e.OPENROUTER_API_KEY, models: { cheap: e.OPENROUTER_MODEL_CHEAP, strong: e.OPENROUTER_MODEL_STRONG } }));
+  if (e.GROK_API_KEY && e.GROK_MODEL_CHEAP && e.GROK_MODEL_STRONG)
+    out.push(createGrokProvider({ apiKey: e.GROK_API_KEY, models: { cheap: e.GROK_MODEL_CHEAP, strong: e.GROK_MODEL_STRONG } }));
   return out;
 }
 const ledger: Ledger = { reserve: async () => "eval", commit: async () => {}, refund: async () => {} };

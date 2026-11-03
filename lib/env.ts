@@ -17,15 +17,18 @@ const serverSchema = z.object({
 
   AI_PROVIDER_ORDER: z
     .string()
-    .default("gemini,openrouter")
-    .transform((s) => s.split(",").map((p) => p.trim()).filter(Boolean))
-    .pipe(z.array(z.enum(["gemini", "openrouter"])).min(1)),
+    .default("gemini,openrouter,grok")
+    .transform((s) => [...new Set(s.split(",").map((p) => p.trim().toLowerCase()).filter(Boolean))])
+    .pipe(z.array(z.enum(["gemini", "openrouter", "grok"])).min(1)),
   GEMINI_API_KEY: optionalText(10),
   GEMINI_MODEL_CHEAP: optionalText(3),
   GEMINI_MODEL_STRONG: optionalText(3),
   OPENROUTER_API_KEY: optionalText(10),
   OPENROUTER_MODEL_CHEAP: optionalText(3),
   OPENROUTER_MODEL_STRONG: optionalText(3),
+  GROK_API_KEY: optionalText(10),
+  GROK_MODEL_CHEAP: optionalText(3),
+  GROK_MODEL_STRONG: optionalText(3),
 
   /** Shared secret pg_cron sends to /api/worker/ingest. At least 32 characters. */
   WORKER_SECRET: optionalText(32),

@@ -2,6 +2,7 @@ import "server-only";
 import { serverEnv } from "@/lib/env";
 import type { LlmProvider } from "../types";
 import { createGeminiProvider } from "./gemini";
+import { createGrokProvider } from "./grok";
 import { createOpenRouterProvider } from "./openrouter";
 
 /**
@@ -28,6 +29,14 @@ export function configuredProviders(): LlmProvider[] {
           apiKey: env.OPENROUTER_API_KEY,
           models: { cheap: env.OPENROUTER_MODEL_CHEAP, strong: env.OPENROUTER_MODEL_STRONG },
           appUrl: env.NEXT_PUBLIC_SITE_URL,
+        }),
+      );
+    }
+    if (name === "grok" && env.GROK_API_KEY && env.GROK_MODEL_CHEAP && env.GROK_MODEL_STRONG) {
+      out.push(
+        createGrokProvider({
+          apiKey: env.GROK_API_KEY,
+          models: { cheap: env.GROK_MODEL_CHEAP, strong: env.GROK_MODEL_STRONG },
         }),
       );
     }

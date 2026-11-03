@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createGeminiProvider } from "@/lib/ai/providers/gemini";
+import { createGrokProvider } from "@/lib/ai/providers/grok";
 import { createOpenRouterProvider } from "@/lib/ai/providers/openrouter";
 import { ProviderError } from "@/lib/ai/types";
 
@@ -88,5 +89,57 @@ describe("openrouter adapter", () => {
   it("treats an empty reply as a bad response", async () => {
     const p = createOpenRouterProvider({ apiKey: "k".repeat(12), models, fetchImpl: fakeFetch(200, { choices: [] }) });
     await expect(p.complete(req)).rejects.toMatchObject({ code: "BAD_RESPONSE" });
+  });
+});
+
+describe("grok adapter", () => {
+  it("calls xAI with a bearer key and counts reasoning tokens", async () => {
+    const seen: Array<{ url: string; init: RequestInit }> = [];
+    const p = createGrokProvider({
+      apiKey: FAKE_KEY,
+      models,
+      fetchImpl: fakeFetch(200, {
+        choices: [{ message: { content: '{"c":3}' } }],
+        usage: { prompt_tokens: 9, completion_tokens: 4, completion_tokens_details: { reasoning_tokens: 6 } },
+      }, seen),
+    });
+    const out = await p.complete(req);
+    expect(out).toEqual({ text: '{"c":3}', provider: "grok", model: "strong-model", tokensIn: 9, tokensOut: 10 });
+    expect(seen[0]!.url).toBe("https://api.x.ai/v1/chat/completions");
+    expect(seen[0]!.url).not.toContain(FAKE_KEY);
+    expect((seen[0]!.init.headers as Record<string, string>).authorization).toBe("Bearer " + FAKE_KEY);
+    expect(JSON.parse(String(seen[0]!.init.body)).response_format).toEqual({ type: "json_object" });
+  });
+
+  it("maps 429 to a retryable RATE_LIMIT error", async () => {
+    const p = createGrokProvider({ apiKey: "k".repeat(12), models, fetchImpl: fakeFetch(429, {}) });
+    await expect(p.complete(req)).rejects.toMatchObject({ code: "RATE_LIMIT", provider: "grok", retryable: true });
+  });
+
+  it("turns a network failure into an UPSTREAM error without the key", async () => {
+    const p = createGrokProvider({
+      apiKey: FAKE_KEY,
+      models,
+      fetchImpl: (async () => {
+        throw new TypeError("fetch failed");
+      }) as typeof fetch,
+    });
+    const err = await p.complete(req).catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "UPSTREAM", provider: "grok" });
+    expect(String((err as Error).message)).not.toContain(FAKE_KEY);
+  });
+});
+
+describe("openrouter token counting", () => {
+  it("does not double-count reasoning tokens already inside completion_tokens", async () => {
+    const p = createOpenRouterProvider({
+      apiKey: FAKE_KEY,
+      models,
+      fetchImpl: fakeFetch(200, {
+        choices: [{ message: { content: "{}" } }],
+        usage: { prompt_tokens: 1, completion_tokens: 10, completion_tokens_details: { reasoning_tokens: 6 } },
+      }),
+    });
+    expect((await p.complete(req)).tokensOut).toBe(10);
   });
 });

@@ -7,7 +7,8 @@ import { profileDocSchema } from "@/lib/profile/schema";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+// Room for the AI step to fall back to a second or third provider.
+export const maxDuration = 300;
 
 // Reads an uploaded resume and returns a DRAFT profile for the person to
 // review in the editor. Nothing is saved here.

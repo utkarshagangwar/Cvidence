@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createGeminiProvider } from "@/lib/ai/providers/gemini";
+import { createGrokProvider } from "@/lib/ai/providers/grok";
 import { createOpenRouterProvider } from "@/lib/ai/providers/openrouter";
 import { runTask, type Ledger } from "@/lib/ai/run-task";
 import { TAILOR_RESUME, tailorPrompt } from "@/lib/ai/tasks";
@@ -25,6 +26,8 @@ function providers(): LlmProvider[] {
     out.push(createGeminiProvider({ apiKey: e.GEMINI_API_KEY, models: { cheap: e.GEMINI_MODEL_CHEAP, strong: e.GEMINI_MODEL_STRONG } }));
   if (e.OPENROUTER_API_KEY && e.OPENROUTER_MODEL_CHEAP && e.OPENROUTER_MODEL_STRONG)
     out.push(createOpenRouterProvider({ apiKey: e.OPENROUTER_API_KEY, models: { cheap: e.OPENROUTER_MODEL_CHEAP, strong: e.OPENROUTER_MODEL_STRONG } }));
+  if (e.GROK_API_KEY && e.GROK_MODEL_CHEAP && e.GROK_MODEL_STRONG)
+    out.push(createGrokProvider({ apiKey: e.GROK_API_KEY, models: { cheap: e.GROK_MODEL_CHEAP, strong: e.GROK_MODEL_STRONG } }));
   return out;
 }
 
@@ -65,7 +68,7 @@ describe.skipIf(!enabled)("tailor evaluation, real model", () => {
   const list = providers();
 
   it("has a provider configured", () => {
-    expect(list.length, "set GEMINI_* or OPENROUTER_* env vars").toBeGreaterThan(0);
+    expect(list.length, "set GEMINI_*, OPENROUTER_* or GROK_* env vars").toBeGreaterThan(0);
   });
 
   for (const f of FIXTURES) {

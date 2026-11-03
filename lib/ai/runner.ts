@@ -1,6 +1,7 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseLedger } from "@/lib/quota/ledger";
+import { sharedProviderHealth } from "./provider-health";
 import { configuredProviders } from "./providers";
 import { QuotaError, runTask, TaskError, type TaskDef, type TaskResult } from "./run-task";
 
@@ -32,7 +33,7 @@ export async function runAiTask<T>(userId: string, task: TaskDef<T>, prompt: { s
   await preflight(userId);
   const started = Date.now();
   try {
-    const result = await runTask({ ledger: createSupabaseLedger(), providers, log }, { userId, task, ...prompt });
+    const result = await runTask({ ledger: createSupabaseLedger(), providers, log, health: sharedProviderHealth }, { userId, task, ...prompt });
     log({ event: "ai.ok", task: task.id, userId, provider: result.provider, ms: Date.now() - started });
     return result;
   } catch (err) {
@@ -43,7 +44,7 @@ export async function runAiTask<T>(userId: string, task: TaskDef<T>, prompt: { s
 
 export class AiNotConfigured extends Error {
   constructor() {
-    super("AI isn't set up on this server yet. Add a Gemini or OpenRouter key and model ids.");
+    super("AI isn't set up on this server yet. Add a Gemini, OpenRouter or Grok key and model ids.");
     this.name = "AiNotConfigured";
   }
 }

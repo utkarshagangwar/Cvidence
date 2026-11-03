@@ -1,7 +1,7 @@
 // Provider-neutral contract for every model call.
 
 export type ModelTier = "cheap" | "strong";
-export type ProviderName = "gemini" | "openrouter";
+export type ProviderName = "gemini" | "openrouter" | "grok";
 
 export interface LlmRequest {
   system: string;
