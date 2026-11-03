@@ -47,6 +47,21 @@
    "fix": "Use 'if not exists' on tables, indexes and columns; put 'drop ... if exists' before triggers, policies and constraints.",
    "ref": "",
    "added": "2026-11-03"
+  },
+  {
+   "id": "SDET-004",
+   "kind": "pattern",
+   "title": "Root vercel.json must pin the Next.js framework",
+   "regex": "\"outputDirectory\"\\s*:\\s*\"public\"",
+   "paths": [
+    "vercel.json"
+   ],
+   "exclude": [],
+   "case_sensitive": false,
+   "why": "The Vercel project kept the old static-site preset and failed with STATIC_BUILD_NO_OUT_DIR looking for public/.",
+   "fix": "Keep framework: nextjs in vercel.json and don't set outputDirectory.",
+   "ref": "",
+   "added": "2026-11-03"
   }
  ]
 }
