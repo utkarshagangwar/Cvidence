@@ -1,0 +1,52 @@
+{
+ "version": 1,
+ "about": "Fixed issues that must not come back. Checked before commit/push and in CI by ut-sdet-reviewer/scripts/regression_guard.py.",
+ "guards": [
+  {
+   "id": "SDET-001",
+   "kind": "pattern",
+   "title": "Cards must not set their own max width",
+   "regex": "className=\"card[^\"]*max-w-\\[",
+   "paths": [
+    "app/**/*.tsx,components/**/*.tsx"
+   ],
+   "exclude": [],
+   "case_sensitive": false,
+   "why": "Per-card widths made cards narrower than page headings and left a ragged right edge; the shared [data-page] column in app/(app)/layout.tsx sets the width",
+   "fix": "Remove max-w from the card; let the page column size it",
+   "ref": "",
+   "added": "2026-11-02"
+  },
+  {
+   "id": "SDET-002",
+   "kind": "pattern",
+   "title": "Put sr-only on a wrapper, not on a table (tables ignore the 1px size and widen the page on phones)",
+   "regex": "<table[^>]*className=\"[^\"]*\\bsr-only\\b",
+   "paths": [
+    "app/**/*.tsx",
+    "components/**/*.tsx"
+   ],
+   "exclude": [],
+   "case_sensitive": false,
+   "why": "",
+   "fix": "",
+   "ref": "",
+   "added": "2026-11-03"
+  },
+  {
+   "id": "SDET-003",
+   "kind": "pattern",
+   "title": "Migrations must be safe to run twice",
+   "regex": "^(?:create table|create (?:unique )?index|alter table \\S+ add column) (?!if not exists)",
+   "paths": [
+    "supabase/migrations/*.sql"
+   ],
+   "exclude": [],
+   "case_sensitive": false,
+   "why": "Running a migration a second time in the SQL editor failed with 'already exists' (42701) and stopped midway.",
+   "fix": "Use 'if not exists' on tables, indexes and columns; put 'drop ... if exists' before triggers, policies and constraints.",
+   "ref": "",
+   "added": "2026-11-03"
+  }
+ ]
+}

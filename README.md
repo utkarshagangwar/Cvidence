@@ -1,143 +1,82 @@
-# ATS Resume Builder
+# Cvidence
 
-A powerful, AI-powered resume builder that creates ATS-friendly resumes with humanized content. Features secure backend API proxy, resume parsing, and comprehensive ATS scoring.
+Job search plus JD-tailored resumes, cover letters and outreach emails that use only facts from your own profile. Every line, backed.
 
-## 🚀 Features
+This repo is mid-rebuild. The new app (Next.js + Supabase) lives at the root. The old single-page builder and its Express proxy are in [`legacy/`](legacy/) until the resume editor and exports are ported, then they get removed.
 
-- **AI-Powered Content Generation** - Uses OpenRouter API to generate professional, humanized resume content
-- **ATS-Friendly Format** - All content follows strict ATS compliance rules
-- **Resume Parsing** - Upload PDF/DOCX files and parse them into editable sections
-- **ATS Scoring** - Get detailed section-by-section ATS compatibility analysis
-- **Export Options** - Download as PDF or DOCX
-- **Secure Architecture** - API key stored in environment variables, never exposed to frontend
+## Stack
 
-## 🔒 Security
+| Layer | Choice |
+| --- | --- |
+| App + API | Next.js 16 (App Router, TypeScript) on Vercel |
+| Styling | Tailwind CSS 4 with Cvidence "Casefile" tokens ([app/globals.css](app/globals.css)) |
+| Data, auth, files | Supabase: Postgres with Row-Level Security, Auth (Google + email magic link) |
+| AI | `LlmProvider` interface: Gemini first, OpenRouter fallback ([lib/ai/](lib/ai/)) |
+| Validation | zod on every request body and every AI reply |
+| Tests | Vitest (unit), pgTAP (RLS) |
 
-This application uses a **secure backend proxy** pattern:
-- Your OpenRouter API key is stored in Vercel environment variables
-- The frontend never sees or stores your API key
-- All AI requests are proxied through the backend with:
-  - Rate limiting (100 requests per 15 minutes per IP)
-  - Input validation
-  - CORS protection
-  - Helmet security headers
-
-## 📁 Project Structure
+## Layout
 
 ```
-├── index.html          # Frontend application (single HTML file)
-├── api/
-│   └── index.js        # Backend Express server (Vercel serverless)
-├── package.json        # Node.js dependencies
-├── vercel.json         # Vercel deployment configuration
-├── .env.example        # Environment variables template
-└── README.md           # This file
+app/              routes: login, auth callback/signout, (app)/dashboard, jobs, applications, profile, settings
+components/       brand (Footnote C logo), shell (sidebar, credits widget, empty states)
+lib/ai/           provider adapters, run-task (reserve → call → validate → commit/refund), JSON repair, untrusted-data wrapper
+lib/quota/        credit prices, IST day maths, Supabase ledger
+lib/supabase/     server (RLS, as the user), browser, admin (service role, ledger only)
+supabase/         migrations and RLS tests
+tests/unit/       Vitest
+legacy/           old index.html + Express API (retiring)
 ```
 
-## 🛠️ Deployment to Vercel
+## Local setup
 
-### Step 1: Push to GitHub
-Push your project to a GitHub repository.
+1. `npm install`
+2. Create a Supabase project, then apply the migrations in `supabase/migrations/` (Supabase CLI: `supabase link` then `supabase db push`, or paste them into the SQL editor in order).
+3. In Supabase → Authentication: turn on Email (magic link) and Google, and add `http://localhost:3000/auth/callback` to the redirect URLs.
+4. `cp .env.example .env.local` and fill in the values (names only are listed there; never commit real values).
+5. `npm run dev` → http://localhost:3000
 
-### Step 2: Import to Vercel
-1. Go to [vercel.com](https://vercel.com)
-2. Click "New Project"
-3. Import your GitHub repository
+## Checks
 
-### Step 3: Configure Environment Variables
-In your Vercel project settings, add the following environment variable:
-
-| Name | Value |
-|------|-------|
-| `OPENROUTER_API_KEY` | Your OpenRouter API key (get one free at [openrouter.ai/keys](https://openrouter.ai/keys)) |
-
-You can also add it via Vercel CLI:
-```bash
-vercel env add OPENROUTER_API_KEY
+```
+npm run typecheck
+npm test
+npm run build
+supabase test db      # RLS tests, needs the Supabase CLI and a local stack
 ```
 
-### Step 4: Deploy
-Vercel will automatically deploy your application. The API routes will be handled by the Express server in `api/index.js`.
+## Rules the code enforces
 
-## 🧪 Local Development
+- AI credits are reserved in Postgres before a model call and refunded on any failure; users can read but never write the ledger.
+- Job-description text is wrapped as untrusted data; model output is parsed as JSON and validated, never executed or rendered as HTML.
+- Model ids are pinned in env; every ledger row records provider, model and prompt version.
+- The service-role key is used only for the ledger; user data is always read and written as the signed-in user, through RLS.
 
-### Prerequisites
-- Node.js 18+
-- npm or yarn
+## License
 
-### Setup
+MIT
 
-1. **Clone the repository**
-   ```bash
-   git clone <your-repo-url>
-   cd ats-resume-builder
-   ```
+## Job boards
 
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
+Jobs come from public company career boards (Greenhouse, Lever, Ashby, Workable), fetched every 6 hours by `/api/worker/ingest` and shared by all users.
 
-3. **Create environment file**
-   ```bash
-   cp .env.example .env
-   ```
+**Add a company** on a board type that already exists: insert a row into `job_sources` in the Supabase table editor (`adapter`, `slug`, `company`). No deploy needed. It's picked up on the next run.
 
-4. **Add your API key to `.env`**
-   ```
-   OPENROUTER_API_KEY=sk-or-v1-your-api-key-here
-   ```
+**Add a new board type** (for example a paid job API):
 
-5. **Start the backend server**
-   ```bash
-   npm run dev
-   ```
+1. Create `lib/jobs/adapters/<name>.ts` exporting a `SourceAdapter` (see `lib/jobs/types.ts`):
+   - `request(source, page, env)` builds the HTTPS request. Read API keys only from `env`.
+   - `parse(body, source)` turns the JSON into postings. Return `more: true` to fetch the next page, and set `maxPages`.
+   - List the key names in `requiredEnv`. Sources are skipped, with "Needs an API key" on Board Status, until they're set.
+2. Add it to `ADAPTERS` in `lib/jobs/registry.ts`.
+3. Add the key names to `.env.example`, and the values to Vercel (never to `job_sources`).
+4. Add a parser test with a sample response in `tests/unit/jobs.test.ts`.
+5. Insert `job_sources` rows with `adapter = '<name>'`. Put any search settings (a query, a country) in `config`.
 
-6. **Open the frontend**
-   Open `index.html` in your browser or serve it:
-   ```bash
-   npx serve .
-   ```
+The worker, filters, scoring and Find jobs screen need no changes.
 
-## 📡 API Endpoints
+Check every board live (network only): `$env:LIVE="1"; npx vitest run --config vitest.eval.config.mts tests/live`
 
-All endpoints are served from `/api/`:
+## Migrations
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Health check and API status |
-| GET | `/api/models` | List available AI models |
-| POST | `/api/chat` | AI chat completion proxy |
-| POST | `/api/parse-resume` | Parse resume text with AI |
-
-## 🎯 Usage
-
-1. **Set Target Role & Industry** - The app will prompt you to enter your target job title and industry
-2. **Fill in Details** - Add your contact info, experience, education, skills, and projects
-3. **Generate with AI** - Click "Generate All with AI" or generate individual sections
-4. **Check ATS Score** - View detailed ATS compatibility analysis
-5. **Download** - Export as PDF or DOCX
-
-## 📋 ATS Compliance Rules
-
-All generated content follows these rules:
-- Plain text only (no special characters)
-- Bullet points start with strong action verbs
-- Past tense for previous roles, present tense for current
-- 1-2 lines per bullet (max ~25 words)
-- No first-person pronouns
-- No filler phrases ("results-driven", "dynamic professional")
-- Specific, quantified achievements
-
-## 🔧 Configuration
-
-### Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENROUTER_API_KEY` | Yes | Your OpenRouter API key |
-| `PORT` | No | Server port (default: 3001) |
-
-## 📄 License
-
-MIT License - See LICENSE file for details.
+Run each file in `supabase/migrations` once, in order, in the Supabase SQL editor. Every file is safe to run again: tables, indexes and columns use `if not exists`, and triggers, policies and constraints are dropped first and recreated. A second run changes nothing. Keep new migrations the same way; guard SDET-003 blocks a commit that isn't.

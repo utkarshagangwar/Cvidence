@@ -6,7 +6,7 @@
     <title>ATS Resume Builder - AI Powered</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-    <script src="https://unpkg.com/docx@8.2.0/build/index.umd.js"></script>
+    <script src="https://unpkg.com/docx@8.2.0/build/index.umd.cjs"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -4132,58 +4132,208 @@ OUTPUT: Valid JSON only, nothing else.`;
         }
 
         // Export Functions
-        function downloadPDF() {
+        function sanitizeFileName(name) {
+            return (name || 'Resume')
+                .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
+                .replace(/\s+/g, '_')
+                .replace(/_+/g, '_')
+                .replace(/^_+|_+$/g, '') || 'Resume';
+        }
+
+        function escapeHTML(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function renderPDFLines(text) {
+            return String(text || '')
+                .split('\n')
+                .filter(line => line.trim())
+                .map(line => `<p style="margin: 0 0 4pt 18pt;">${escapeHTML(line.trim())}</p>`)
+                .join('');
+        }
+
+        function createPDFSection(title, content) {
+            if (!content) return '';
+            return `
+                <section style="margin-bottom: 14pt;">
+                    <h2 style="font-size: 10pt; font-weight: 700; color: #111827; text-transform: uppercase; border-bottom: 1px solid #9ca3af; margin: 0 0 7pt 0; padding-bottom: 2pt; letter-spacing: 0.5pt;">${escapeHTML(title)}</h2>
+                    ${content}
+                </section>
+            `;
+        }
+
+        function createPDFExportElement() {
+            const wrapper = document.createElement('div');
+            wrapper.style.position = 'fixed';
+            wrapper.style.left = '-9999px';
+            wrapper.style.top = '0';
+            wrapper.style.width = '8.5in';
+            wrapper.style.background = '#ffffff';
+            wrapper.style.color = '#111827';
+            wrapper.style.zIndex = '-1';
+
+            const contactParts = [
+                resumeData.contact.email,
+                resumeData.contact.phone,
+                resumeData.contact.location
+            ].filter(Boolean);
+            const links = [resumeData.contact.linkedin, resumeData.contact.portfolio].filter(Boolean);
+
+            const experienceContent = resumeData.experience.some(exp => exp.title) ? resumeData.experience.map(exp => {
+                if (!exp.title) return '';
+                return `
+                    <div style="margin-bottom: 11pt;">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12pt;">
+                            <h3 style="font-size: 11pt; font-weight: 700; color: #111827; margin: 0;">${escapeHTML(exp.title)}</h3>
+                            <span style="font-size: 9pt; color: #4b5563;">${escapeHTML(exp.dates)}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12pt; margin-top: 2pt;">
+                            <p style="font-size: 10pt; color: #374151; font-style: italic; margin: 0;">${escapeHTML(exp.company)}</p>
+                            <span style="font-size: 9pt; color: #4b5563;">${escapeHTML(exp.location)}</span>
+                        </div>
+                        <div style="margin-top: 4pt; color: #374151;">${renderPDFLines(exp.bullets)}</div>
+                    </div>
+                `;
+            }).join('') : '';
+
+            const educationContent = resumeData.education.some(edu => edu.degree) ? resumeData.education.map(edu => {
+                if (!edu.degree) return '';
+                return `
+                    <div style="margin-bottom: 8pt;">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12pt;">
+                            <h3 style="font-size: 11pt; font-weight: 700; color: #111827; margin: 0;">${escapeHTML(edu.degree)}</h3>
+                            <span style="font-size: 9pt; color: #4b5563;">${escapeHTML(edu.dates)}</span>
+                        </div>
+                        <p style="font-size: 10pt; color: #374151; margin: 2pt 0 0 0;">${escapeHTML(edu.school)}</p>
+                        ${edu.details ? `<p style="font-size: 9pt; color: #4b5563; margin: 2pt 0 0 0;">${escapeHTML(edu.details)}</p>` : ''}
+                    </div>
+                `;
+            }).join('') : '';
+
+            const skillsContent = resumeData.skills.technical || resumeData.skills.soft || resumeData.skills.tools ? `
+                ${resumeData.skills.technical ? `<p style="margin: 0 0 4pt 0; color: #374151;"><strong>Technical:</strong> ${escapeHTML(resumeData.skills.technical)}</p>` : ''}
+                ${resumeData.skills.soft ? `<p style="margin: 0 0 4pt 0; color: #374151;"><strong>Soft Skills:</strong> ${escapeHTML(resumeData.skills.soft)}</p>` : ''}
+                ${resumeData.skills.tools ? `<p style="margin: 0; color: #374151;"><strong>Tools:</strong> ${escapeHTML(resumeData.skills.tools)}</p>` : ''}
+            ` : '';
+
+            const projectsContent = resumeData.projects.some(proj => proj.name) ? resumeData.projects.map(proj => {
+                if (!proj.name) return '';
+                return `
+                    <div style="margin-bottom: 8pt;">
+                        <h3 style="font-size: 11pt; font-weight: 700; color: #111827; margin: 0;">${escapeHTML(proj.name)}</h3>
+                        ${proj.tech ? `<p style="font-size: 9pt; color: #4b5563; margin: 2pt 0 0 0;">Technologies: ${escapeHTML(proj.tech)}</p>` : ''}
+                        ${proj.description ? `<p style="font-size: 10pt; color: #374151; margin: 2pt 0 0 0;">${escapeHTML(proj.description)}</p>` : ''}
+                    </div>
+                `;
+            }).join('') : '';
+
+            const certificationsContent = resumeData.certifications.some(cert => cert.name) ? `
+                <ul style="margin: 0; padding-left: 18pt; color: #374151;">
+                    ${resumeData.certifications.filter(cert => cert.name).map(cert => `
+                        <li>${escapeHTML(cert.name)}${cert.issuer ? ` - ${escapeHTML(cert.issuer)}` : ''}${cert.date ? ` (${escapeHTML(cert.date)})` : ''}</li>
+                    `).join('')}
+                </ul>
+            ` : '';
+
+            const languagesContent = resumeData.languages.some(lang => lang.language) ? `
+                <p style="margin: 0; color: #374151;">
+                    ${resumeData.languages.filter(lang => lang.language).map(lang =>
+                        `${escapeHTML(lang.language)}${lang.proficiency ? ` (${escapeHTML(lang.proficiency)})` : ''}`
+                    ).join(', ')}
+                </p>
+            ` : '';
+
+            wrapper.innerHTML = `
+                <div style="width: 8.5in; min-height: 11in; padding: 0.5in; box-sizing: border-box; background: #ffffff; color: #111827; font-family: 'Times New Roman', Times, serif; font-size: 11pt; line-height: 1.4;">
+                    <header style="text-align: center; margin-bottom: 18pt; border-bottom: 2px solid #1f2937; padding-bottom: 12pt;">
+                        <h1 style="font-size: 20pt; line-height: 1.2; font-weight: 700; color: #111827; margin: 0 0 4pt 0;">${escapeHTML(resumeData.contact.name || 'Your Name')}</h1>
+                        ${contactParts.length ? `<p style="font-size: 10pt; color: #4b5563; margin: 0;">${escapeHTML(contactParts.join(' | '))}</p>` : ''}
+                        ${links.length ? `<p style="font-size: 10pt; color: #4b5563; margin: 2pt 0 0 0;">${escapeHTML(links.join(' | '))}</p>` : ''}
+                    </header>
+                    ${createPDFSection('Professional Summary', resumeData.summary ? `<p style="margin: 0; color: #374151;">${escapeHTML(resumeData.summary)}</p>` : '')}
+                    ${createPDFSection('Professional Experience', experienceContent)}
+                    ${createPDFSection('Education', educationContent)}
+                    ${createPDFSection('Skills', skillsContent)}
+                    ${createPDFSection('Projects', projectsContent)}
+                    ${createPDFSection('Certifications', certificationsContent)}
+                    ${createPDFSection('Languages', languagesContent)}
+                </div>
+            `;
+
+            document.body.appendChild(wrapper);
+            return wrapper;
+        }
+
+        async function downloadPDF() {
             // Validate resume data first
             const errors = validateResumeForExport();
             if (errors.length > 0) {
                 showToast(errors[0]);
                 return;
             }
+
+            if (typeof window.html2pdf === 'undefined') {
+                showToast('PDF generator failed to load. Please refresh and try again.');
+                return;
+            }
             
             const timeoutId = showLoadingWithTimeout('Generating PDF...', 60000);
+            let exportElement = null;
             
             try {
                 collectFormData();
                 renderPreview();
-                
-                const element = document.getElementById('resumePreview');
-                
-                if (!element || !element.innerHTML.trim()) {
-                    clearLoadingTimeout(timeoutId);
+
+                exportElement = createPDFExportElement();
+
+                if (!exportElement || !exportElement.innerHTML.trim()) {
                     showToast('No content to export. Please fill in your resume details.');
                     return;
                 }
+
+                const fileName = `${sanitizeFileName(resumeData.contact.name)}_Resume.pdf`;
                 
                 const opt = {
-                    margin: 0.5,
-                    filename: `${resumeData.contact.name || 'Resume'}_Resume.pdf`,
+                    margin: 0,
+                    filename: fileName,
                     image: { type: 'jpeg', quality: 0.98 },
-                    html2canvas: { scale: 2, useCORS: true },
+                    html2canvas: {
+                        scale: 2,
+                        useCORS: true,
+                        backgroundColor: '#ffffff',
+                        logging: false
+                    },
                     jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
                 };
                 
-                html2pdf().set(opt).from(element).save()
-                    .then(() => {
-                        clearLoadingTimeout(timeoutId);
-                        showToast('PDF downloaded successfully!');
-                    })
-                    .catch((error) => {
-                        console.error('PDF generation error:', error);
-                        clearLoadingTimeout(timeoutId);
-                        showToast('Failed to generate PDF. Please try again.');
-                    });
+                await window.html2pdf().set(opt).from(exportElement).save();
+                showToast('PDF downloaded successfully!');
             } catch (error) {
                 console.error('PDF download error:', error);
+                showToast('Failed to generate PDF. Please try again.');
+            } finally {
+                if (exportElement) {
+                    exportElement.remove();
+                }
                 clearLoadingTimeout(timeoutId);
-                showToast('An error occurred. Please try again.');
             }
         }
 
-        function downloadDOCX() {
+        async function downloadDOCX() {
             // Validate resume data first
             const errors = validateResumeForExport();
             if (errors.length > 0) {
                 showToast(errors[0]);
+                return;
+            }
+
+            if (typeof window.docx === 'undefined' || !window.docx.Packer) {
+                showToast('DOCX generator failed to load. Please refresh and try again.');
                 return;
             }
             
@@ -4192,7 +4342,7 @@ OUTPUT: Valid JSON only, nothing else.`;
             try {
                 collectFormData();
             
-            const { Document, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle } = docx;
+            const { Document, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle } = window.docx;
             
             const children = [];
             
@@ -4346,26 +4496,21 @@ OUTPUT: Valid JSON only, nothing else.`;
                 sections: [{ properties: {}, children }]
             });
             
-            docx.Packer.toBlob(doc)
-                .then(blob => {
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `${resumeData.contact.name || 'Resume'}_Resume.docx`;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                    clearLoadingTimeout(timeoutId);
-                    showToast('DOCX downloaded successfully!');
-                })
-                .catch((error) => {
-                    console.error('DOCX generation error:', error);
-                    clearLoadingTimeout(timeoutId);
-                    showToast('Failed to generate DOCX. Please try again.');
-                });
+            const blob = await window.docx.Packer.toBlob(doc);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${sanitizeFileName(resumeData.contact.name)}_Resume.docx`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            showToast('DOCX downloaded successfully!');
             } catch (error) {
                 console.error('DOCX download error:', error);
+                showToast('Failed to generate DOCX. Please try again.');
+            } finally {
                 clearLoadingTimeout(timeoutId);
-                showToast('An error occurred. Please try again.');
             }
         }
 

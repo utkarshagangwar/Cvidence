@@ -1,0 +1,32 @@
+{
+  "name": "ats-resume-builder",
+  "version": "1.0.0",
+  "description": "ATS-friendly resume builder with AI-powered content generation",
+  "main": "api/index.js",
+  "scripts": {
+    "start": "node api/index.js",
+    "dev": "nodemon api/index.js",
+    "vercel-build": "echo 'No build step required'"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.22.1",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^7.2.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "resume",
+    "ats",
+    "openrouter",
+    "ai",
+    "career"
+  ],
+  "license": "MIT"
+}

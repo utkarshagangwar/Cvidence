@@ -26,3 +26,24 @@ build/
 # Temporary files
 tmp/
 temp/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+.vercel
+
+# Local env files (all of them, any name)
+.env*
+!.env.example
+!legacy/.env.example
+
+# Supabase local
+supabase/.branches
+supabase/.temp
+
+# Playwright
+test-results/
+playwright-report/
+tests/e2e/.auth/
