@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { ResumeSheet } from "@/components/resume/ResumeSheet";
 import { getResumeDocument } from "@/lib/applications/service";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { PrintButton } from "./PrintButton";
+import { PrintButton } from "@/components/resume/PrintButton";
 
 export const metadata: Metadata = { title: "Resume", robots: { index: false } };
 export const dynamic = "force-dynamic";

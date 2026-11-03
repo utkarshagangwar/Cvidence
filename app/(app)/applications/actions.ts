@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { aiErrorMessage } from "@/lib/ai/runner";
+import { aiErrorMessage, runAiTask } from "@/lib/ai/runner";
+import { GENERATE_JD, generateJdPrompt, JD_LEVELS, type JdLevel } from "@/lib/ai/tasks";
 import { AppError, createApplication, editUnit, rematch, restoreVersion, rewriteUnit, tailorResume } from "@/lib/applications/service";
 import { addNote, deleteNote, editLetterUnit, generateLetter, isStatus, refineDocument, setStatus } from "@/lib/applications/documents";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -30,6 +31,29 @@ export async function createApplicationAction(_prev: ActionState, form: FormData
   }
   revalidatePath("/applications");
   redirect(`/applications/${id}`);
+}
+
+export type GenerateJdState = { status: "ok"; title: string; text: string } | { status: "error"; message: string };
+
+const jdInput = z.object({
+  role: z.string().trim().min(2).max(120),
+  level: z.enum(Object.keys(JD_LEVELS) as [JdLevel, ...JdLevel[]]),
+  location: z.string().trim().max(120).default(""),
+});
+
+/** Writes a sample job description for a target role (1 credit). Nothing is saved. */
+export async function generateJdAction(input: { role: string; level: string; location?: string }): Promise<GenerateJdState> {
+  const parsed = jdInput.safeParse(input);
+  if (!parsed.success) return { status: "error", message: "Type the job title you're aiming for (2 to 120 characters)." };
+  try {
+    const { user } = await session();
+    const { role, level, location } = parsed.data;
+    const out = await runAiTask(user.id, GENERATE_JD, generateJdPrompt(role, level, location));
+    revalidatePath("/", "layout");
+    return { status: "ok", title: out.data.title, text: out.data.text };
+  } catch (err) {
+    return { status: "error", message: message(err) };
+  }
 }
 
 async function run(applicationId: string, fn: (s: Awaited<ReturnType<typeof session>>) => Promise<unknown>): Promise<ActionState> {

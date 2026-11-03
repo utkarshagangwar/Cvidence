@@ -96,9 +96,9 @@ export function importResumePrompt(resumeText: string) {
 // ---------------------------------------------------------------------------
 export const EXTRACT_JD: TaskDef<ExtractedJd> = {
   id: "extract",
-  promptVersion: "extract-jd@2",
+  promptVersion: "extract-jd@3",
   tier: "cheap",
-  maxOutputTokens: 2500,
+  maxOutputTokens: 4000,
   temperature: 0,
   schema: extractedJdSchema,
 };
@@ -107,12 +107,13 @@ export function extractPrompt(jdText: string) {
   return {
     system: [
       "You read a job description and list what it asks for.",
-      "requirements: one entry per distinct requirement, ids q1, q2, ... in order. kind is one of:",
+      "requirements: one entry per distinct requirement, ids q1, q2, ... in order, at most 30 (merge near-duplicates). kind is one of:",
       "skill (a tool, technology or technique), years (minimum years of experience; put the number in `years`),",
       "language (a spoken language; put it in `language`), other (domain, education, anything else).",
       "mustHave is false for 'nice to have', 'bonus' or 'plus' items.",
       "Every requirement has text: the posting's own short wording for it. Spoken languages are full English names, e.g. Hindi, never codes.",
       "Also return title, company, location, remote (true/false/null), applyEmail and applyUrl if the posting states them, and language (ISO code of the posting).",
+      "When the posting doesn't state a field, use \"\" for text fields and null for remote, applyEmail and applyUrl. years is a number or null.",
       UNTRUSTED_DATA_RULE,
       JSON_ONLY,
       'Shape: {"title":"...","company":"...","location":"...","remote":null,"applyEmail":null,"applyUrl":null,"language":"en","requirements":[{"id":"q1","text":"...","kind":"skill","years":null,"language":null,"mustHave":true}]}',
@@ -223,6 +224,124 @@ export function rewriteBulletPrompt(current: string, sourceFacts: string[], jdTi
       'Shape: {"text":"..."}',
     ].join("\n"),
     user: JSON.stringify({ TARGET_ROLE: jdTitle, CURRENT: current, SOURCE: sourceFacts, REQUEST: instruction.slice(0, 300) }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Profile ATS fixes: reword the master profile's own text so it passes the
+// ATS checks. Same ledger slot and price as a refine (1 credit).
+// ---------------------------------------------------------------------------
+export const IMPROVE_BULLETS_MAX = 40;
+
+export const improveSummarySchema = z.object({ summary: z.string().trim().min(1).max(1200) });
+export const improveBulletsSchema = z.object({
+  bullets: z
+    .array(z.object({ id: z.string().regex(/^b\d{1,2}$/), text: z.string().trim().min(1).max(600) }))
+    .max(IMPROVE_BULLETS_MAX),
+});
+
+export const IMPROVE_SUMMARY: TaskDef<z.infer<typeof improveSummarySchema>> = {
+  id: "refine",
+  promptVersion: "improve-summary@1",
+  tier: "strong",
+  maxOutputTokens: 600,
+  temperature: 0.3,
+  schema: improveSummarySchema,
+};
+
+export const IMPROVE_BULLETS: TaskDef<z.infer<typeof improveBulletsSchema>> = {
+  id: "refine",
+  promptVersion: "improve-bullets@1",
+  tier: "strong",
+  maxOutputTokens: 4000,
+  temperature: 0.2,
+  schema: improveBulletsSchema,
+};
+
+const ATS_FILLER_WORDS = "results-driven, dynamic professional, team player, go-getter, synergy, hard-working, detail-oriented";
+
+export function improveSummaryPrompt(doc: ProfileDoc) {
+  const p = profileForModel(doc);
+  const facts = {
+    headline: doc.basics.headline,
+    current_summary: doc.basics.summary,
+    roles: p.roles.map((r) => ({ title: r.title, company: r.company, dates: r.dates, bullets: r.bullets })),
+    projects: p.projects.map((x) => ({ name: x.name, description: x.description })),
+    skills: p.skills,
+  };
+  return {
+    system: [
+      "You rewrite the professional summary at the top of a master resume so it passes ATS checks.",
+      NO_INVENTION,
+      "Keep the person's own facts and meaning. If current_summary is empty, write one from the roles, projects and skills.",
+      "40 to 70 words, 2 or 3 sentences. Start with the role or headline, not a pronoun. No first person (I, me, my, we, our).",
+      `Never use these filler phrases: ${ATS_FILLER_WORDS}. Name concrete tools and domains from the profile instead.`,
+      UNTRUSTED_DATA_RULE,
+      JSON_ONLY,
+      'Shape: {"summary":"..."}',
+    ].join("\n"),
+    user: `PROFILE:\n${wrapUntrusted("PROFILE", JSON.stringify(facts))}`,
+  };
+}
+
+export function improveBulletsPrompt(items: Array<{ id: string; text: string; tense: "past" | "present"; role: string }>, past: string[], present: string[]) {
+  return {
+    system: [
+      "You reword resume bullets so they pass ATS checks. Each item is one bullet from the person's own resume.",
+      "Keep every fact in the bullet and add none: no new numbers, tools, employers, products, results or dates.",
+      "Each rewritten bullet: one sentence, at most 30 words, no first person (I, me, my, we, our).",
+      `Start it with an action verb in the item's tense. Past: one of ${past.join(", ")}. Present: one of ${present.join(", ")}.`,
+      "Use the verb list as written, capitalised. If a bullet is over 30 words, tighten it; drop filler words before facts.",
+      "Return every item by its id.",
+      UNTRUSTED_DATA_RULE,
+      JSON_ONLY,
+      'Shape: {"bullets":[{"id":"b1","text":"..."}]}',
+    ].join("\n"),
+    user: `Bullets:\n${wrapUntrusted("BULLETS", JSON.stringify(items))}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Sample job description for a target role, for people who have no posting to
+// paste yet. Written in the layout the extract step reads best. 1 credit.
+// ---------------------------------------------------------------------------
+export const JD_LEVELS = {
+  entry: "entry level, 0 to 2 years of experience",
+  mid: "mid level, 2 to 5 years of experience",
+  senior: "senior, 5 to 8 years of experience",
+  lead: "lead or principal, 8+ years of experience",
+} as const;
+export type JdLevel = keyof typeof JD_LEVELS;
+
+export const generateJdSchema = z.object({
+  title: z.string().trim().min(2).max(200),
+  text: z.string().trim().min(200).max(8000),
+});
+
+export const GENERATE_JD: TaskDef<z.infer<typeof generateJdSchema>> = {
+  id: "refine",
+  promptVersion: "generate-jd@1",
+  tier: "cheap",
+  maxOutputTokens: 2000,
+  temperature: 0.4,
+  schema: generateJdSchema,
+};
+
+export function generateJdPrompt(role: string, level: JdLevel, location: string) {
+  return {
+    system: [
+      "You write a typical, realistic job description for the TARGET ROLE at the LEVEL given, the way a well-run company would post it.",
+      "Describe what this role usually involves across the industry. Don't name a real company, salary, benefits or perks; write 'the company' or 'our team'.",
+      "Plain text in this exact layout, with '- ' bullets and a blank line between sections:",
+      "Title line (the role and level), then 'About the role' (2 sentences), 'Responsibilities' (6 to 8 bullets),",
+      "'Requirements' (6 to 9 must-have bullets; the first states the years of experience for the LEVEL), and 'Nice to have' (2 to 4 bullets).",
+      "Each bullet names one concrete skill, tool or duty, so each one can be checked on its own. If a LOCATION is given, add a 'Location:' line under the title.",
+      "title: the job title only, e.g. 'Senior QA Engineer'.",
+      UNTRUSTED_DATA_RULE,
+      JSON_ONLY,
+      'Shape: {"title":"...","text":"..."}',
+    ].join("\n"),
+    user: [`LEVEL: ${JD_LEVELS[level]}`, wrapUntrusted("TARGET_ROLE", role), ...(location ? [wrapUntrusted("LOCATION", location)] : [])].join("\n"),
   };
 }
 

@@ -22,21 +22,68 @@ export interface AtsResult {
   sections: AtsSection[];
 }
 
-const ACTION_VERBS = new Set(
-  (
-    "achieved analysed analyzed automated built championed coached collaborated configured created cut debugged decreased " +
-    "defined delivered deployed designed developed drove enabled engineered established executed expanded generated grew " +
-    "handled implemented improved increased integrated introduced launched led maintained managed mentored migrated " +
-    "monitored optimised optimized organised organized owned piloted planned produced profiled raised reduced refactored " +
-    "resolved reviewed rewrote ran scaled set shipped simplified spearheaded standardised standardized streamlined " +
-    "supported tested trained triaged upgraded validated verified wrote"
-  ).split(" "),
-);
+// Action verbs as [present, past] pairs, so a current role written as "Build",
+// "Run" counts as much as a finished one written as "Built", "Ran".
+const VERB_PAIRS: Array<[string, string]> = (
+  "achieve:achieved administer:administered analyse:analysed analyze:analyzed assess:assessed assist:assisted audit:audited " +
+  "automate:automated build:built champion:championed coach:coached collaborate:collaborated communicate:communicated " +
+  "conduct:conducted configure:configured contribute:contributed coordinate:coordinated create:created cut:cut " +
+  "debug:debugged decrease:decreased define:defined deliver:delivered deploy:deployed design:designed develop:developed " +
+  "document:documented drive:drove enable:enabled engineer:engineered ensure:ensured establish:established " +
+  "evaluate:evaluated execute:executed expand:expanded facilitate:facilitated generate:generated grow:grew handle:handled " +
+  "identify:identified implement:implemented improve:improved increase:increased inspect:inspected install:installed " +
+  "integrate:integrated interview:interviewed introduce:introduced investigate:investigated launch:launched lead:led " +
+  "log:logged maintain:maintained manage:managed mentor:mentored migrate:migrated monitor:monitored negotiate:negotiated " +
+  "onboard:onboarded operate:operated optimise:optimised optimize:optimized organise:organised organize:organized " +
+  "own:owned participate:participated partner:partnered perform:performed pilot:piloted plan:planned prepare:prepared " +
+  "present:presented prioritise:prioritised prioritize:prioritized produce:produced profile:profiled raise:raised " +
+  "recruit:recruited reduce:reduced refactor:refactored report:reported research:researched resolve:resolved " +
+  "review:reviewed rewrite:rewrote run:ran scale:scaled schedule:scheduled screen:screened set:set ship:shipped " +
+  "simplify:simplified source:sourced spearhead:spearheaded standardise:standardised standardize:standardized " +
+  "streamline:streamlined supervise:supervised support:supported test:tested track:tracked train:trained triage:triaged " +
+  "upgrade:upgraded validate:validated verify:verified write:wrote"
+)
+  .split(" ")
+  .map((p) => p.split(":") as [string, string]);
 
-const PRONOUNS = /\b(i|me|my|mine|we|our)\b/i;
-const FILLER = /\b(results[- ]driven|dynamic professional|team player|go[- ]getter|synergy|hard[- ]working|detail[- ]oriented)\b/i;
+/** Past-tense action verbs (finished roles and projects). */
+export const PAST_VERBS = [...new Set(VERB_PAIRS.map(([, past]) => past))];
 
-const words = (s: string) => s.split(/\s+/).filter(Boolean);
+/** Present-tense action verbs (current roles). */
+export const PRESENT_VERBS = [...new Set(VERB_PAIRS.map(([present]) => present))];
+
+const ACTION_VERBS = new Set([...PAST_VERBS, ...PRESENT_VERBS]);
+
+export const PRONOUNS = /\b(i|me|my|mine|we|our)\b/i;
+export const FILLER = /\b(results[- ]driven|dynamic professional|team player|go[- ]getter|synergy|hard[- ]working|detail[- ]oriented)\b/i;
+
+export const words = (s: string) => s.split(/\s+/).filter(Boolean);
+
+export const startsWithActionVerb = (t: string) => ACTION_VERBS.has(words(t)[0]?.toLowerCase().replace(/[^a-z]/g, "") ?? "");
+
+/** True when a bullet fails one of the scored bullet checks (verb, length, first person). */
+export function bulletNeedsWork(t: string): boolean {
+  return t.trim().length > 0 && (!startsWithActionVerb(t) || words(t).length > 30 || PRONOUNS.test(t));
+}
+
+/** True when the summary fails a scored check AI can fix by rewording (length, first person, filler). */
+export function summaryNeedsWork(s: string): boolean {
+  const n = words(s).length;
+  return n < 25 || n > 90 || PRONOUNS.test(s) || FILLER.test(s);
+}
+
+/**
+ * True when an AI rewrite can raise this section's score right now. A low score
+ * that comes from missing facts (no bullets, no dates) is left to the person.
+ */
+export function aiCanFix(key: AtsSection["key"], doc: ProfileDoc): boolean {
+  if (key === "summary") {
+    const hasFacts = doc.basics.summary.trim() || doc.basics.headline.trim() || doc.experiences.length > 0 || doc.projects.length > 0;
+    return Boolean(hasFacts) && summaryNeedsWork(doc.basics.summary);
+  }
+  if (key === "experience") return doc.experiences.some((e) => e.bullets.some((b) => bulletNeedsWork(b.text)));
+  return false;
+}
 
 function sectionScore(checks: AtsCheck[]) {
   const scored = checks.filter((c) => !c.warning);
@@ -74,9 +121,10 @@ export function scoreProfile(doc: ProfileDoc): AtsResult {
   sections.push({ key: "summary", name: "Summary", checks: summary, score: sectionScore(summary) });
 
   const bullets = doc.experiences.flatMap((e) => e.bullets.map((x) => x.text));
-  const verbStart = bullets.filter((t) => ACTION_VERBS.has(words(t)[0]?.toLowerCase().replace(/[^a-z]/g, "") ?? "")).length;
+  const verbStart = bullets.filter(startsWithActionVerb).length;
   const tooLong = bullets.filter((t) => words(t).length > 30).length;
   const withNumbers = bullets.filter((t) => /\d/.test(t)).length;
+  const thin = doc.experiences.filter((e) => e.bullets.filter((x) => x.text.trim()).length < 2).map((e) => e.title.trim() || e.company.trim() || "an untitled role");
   const experience: AtsCheck[] = [
     { passed: doc.experiences.length > 0, message: doc.experiences.length ? `${doc.experiences.length} role(s) listed` : "Add at least one role" },
     {
@@ -84,8 +132,10 @@ export function scoreProfile(doc: ProfileDoc): AtsResult {
       message: doc.experiences.every((e) => e.startDate) ? "Every role has a start date" : "Add start dates to every role (years of experience are worked out from them)",
     },
     {
-      passed: doc.experiences.length > 0 && doc.experiences.every((e) => e.bullets.length >= 2),
-      message: "Each role has at least two bullets",
+      passed: doc.experiences.length > 0 && thin.length === 0,
+      message: thin.length
+        ? `Add at least two bullets to ${thin.slice(0, 3).join(", ")}${thin.length > 3 ? ` and ${thin.length - 3} more` : ""}`
+        : "Each role has at least two bullets",
     },
     {
       passed: bullets.length > 0 && verbStart / bullets.length >= 0.7,

@@ -405,5 +405,14 @@
   }
   .resume-sheet {
     font-size: 10.5pt;
+    gap: 0.75rem;
+  }
+  /* Keep a heading with its first entry, and never split one entry across pages. */
+  .resume-sheet h2 {
+    break-after: avoid;
+  }
+  .resume-sheet li,
+  .resume-sheet .break-inside-avoid {
+    break-inside: avoid;
   }
 }

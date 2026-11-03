@@ -13,12 +13,45 @@ export function languageName(value: string): string {
   return LANGUAGE_CODES[v.toLowerCase()] ?? v;
 }
 
+const KINDS = new Set(["skill", "years", "language", "other"]);
+// Kinds models invent instead of the four we ask for.
+const KIND_ALIASES: Record<string, string> = {
+  tool: "skill", technology: "skill", technical: "skill", tech: "skill", framework: "skill", technique: "skill",
+  experience: "years", seniority: "years", "spoken language": "language",
+};
+
+export const MAX_REQUIREMENTS = 30;
+
+// Keep every requirement that reads cleanly, drop the odd broken one, and stop
+// at the cap: a long posting or one bad entry shouldn't fail the whole reply.
+function cleanRequirements(raw: unknown): unknown {
+  if (!Array.isArray(raw)) return raw;
+  const out: unknown[] = [];
+  const ids = new Set<string>();
+  for (const item of raw) {
+    if (out.length >= MAX_REQUIREMENTS) break;
+    const r = requirementSchema.safeParse(item);
+    if (!r.success || ids.has(r.data.id)) continue;
+    ids.add(r.data.id);
+    out.push(item);
+  }
+  return out;
+}
+
 // Fill in what the model left out instead of failing the whole reply:
 // "years" and "language" entries often come back without their wording.
 function normaliseRequirement(raw: unknown): unknown {
   if (!raw || typeof raw !== "object") return raw;
   const r = { ...(raw as Record<string, unknown>) };
   if (typeof r.language === "string") r.language = languageName(r.language);
+  // "3+", "5 years" -> 3, 5; anything else unreadable -> no number.
+  if (typeof r.years === "string") {
+    const n = Number.parseFloat(r.years);
+    r.years = Number.isFinite(n) ? n : null;
+  }
+  if (typeof r.mustHave === "string") r.mustHave = !/^(false|no|nice|optional|bonus|plus)/i.test(r.mustHave.trim());
+  if (typeof r.kind === "string") r.kind = KIND_ALIASES[r.kind.trim().toLowerCase()] ?? (KINDS.has(r.kind.trim().toLowerCase()) ? r.kind.trim().toLowerCase() : "other");
+  if (typeof r.text === "string" && r.text.trim().length > 300) r.text = `${r.text.trim().slice(0, 297)}...`;
   const text = typeof r.text === "string" ? r.text.trim() : "";
   if (text.length < 2) {
     if (typeof r.language === "string" && r.language) r.text = r.language;
@@ -48,7 +81,7 @@ export const extractedJdSchema = z.object({
   applyEmail: z.string().trim().max(320).nullable().default(null),
   applyUrl: z.string().trim().max(500).nullable().default(null),
   language: z.string().trim().max(20).default("en"),
-  requirements: z.array(requirementSchema).min(1).max(30),
+  requirements: z.preprocess(cleanRequirements, z.array(requirementSchema).min(1).max(MAX_REQUIREMENTS)),
 });
 
 export type Requirement = z.infer<typeof requirementSchema>;
@@ -60,7 +93,7 @@ export const matchMappingSchema = z.object({
     .array(
       z.object({
         requirementId: z.string().regex(/^q\d{1,2}$/),
-        skillName: z.string().trim().max(100).nullable(),
+        skillName: z.string().trim().max(100).nullable().default(null),
       }),
     )
     .max(30),

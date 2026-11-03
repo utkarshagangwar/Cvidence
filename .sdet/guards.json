@@ -62,6 +62,21 @@
    "fix": "Keep framework: nextjs in vercel.json and don't set outputDirectory.",
    "ref": "",
    "added": "2026-11-03"
+  },
+  {
+   "id": "SDET-005",
+   "kind": "pattern",
+   "title": "Model replies must go through dropNulls before schema checks",
+   "regex": "schema\\.safeParse\\(parsed\\)",
+   "paths": [
+    "lib/ai/**/*.ts"
+   ],
+   "exclude": [],
+   "case_sensitive": false,
+   "why": "Models send null for empty fields; without dropNulls a null title failed the whole JD read (wasn't in the shape)",
+   "fix": "task.schema.safeParse(dropNulls(parsed))",
+   "ref": "",
+   "added": "2026-11-03"
   }
  ]
 }

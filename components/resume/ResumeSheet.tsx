@@ -1,3 +1,4 @@
+import { contactParts, gradeLabel, skillLines } from "@/lib/export/format";
 import type { ResumeDocumentData } from "@/lib/tailor/frame";
 import type { Flag, Unit } from "@/lib/tailor/types";
 
@@ -40,35 +41,53 @@ export function ResumeSheet({ data, showTags = false, renderUnit }: ResumeSheetP
     const body = <UnitText unit={u} flags={f} showTags={showTags} />;
     return renderUnit ? renderUnit(u, f, body) : body;
   };
-  const contact = [b.city, b.phone, b.email, ...b.links.map((l) => l.url)].filter(Boolean);
-  const heading = "border-b border-line-soft pb-1 font-sans text-[11px] font-semibold uppercase tracking-[0.12em] text-muted print:text-black";
+  const contact = contactParts(data);
+  const skills = skillLines(data);
+  const heading = "m-0 break-after-avoid border-b border-line-soft pb-1 font-sans text-[11px] font-semibold uppercase tracking-[0.12em] text-muted print:border-black/40 print:text-black";
+  const meta = "font-sans text-[13px] text-muted print:text-black/75";
+  const list = "m-0 flex list-disc flex-col gap-1 pl-[18px] text-[14.5px] leading-[1.5] marker:text-subtle print:marker:text-black";
+  // One entry header: what (bold) and when (right, never wraps), then where.
+  const entryHead = (title: React.ReactNode, when: string, where: string) => (
+    <div className="flex flex-col">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 text-[15px]">
+        <b className="min-w-0">{title}</b>
+        {when && <span className={`${meta} whitespace-nowrap`}>{when}</span>}
+      </div>
+      {where && <span className={meta}>{where}</span>}
+    </div>
+  );
 
   return (
     <article className="resume-sheet flex flex-col gap-4 rounded-[4px] border border-line bg-sheet px-6 py-8 font-display text-ink sm:px-11 sm:py-10 print:border-0 print:p-0">
       <header className="flex flex-col gap-1">
         <h1 className="m-0 text-[26px] font-semibold tracking-[-0.01em]">{b.name || "Your name"}</h1>
-        <p className="m-0 font-sans text-[13px] text-muted print:text-black">{[b.headline, ...contact].filter(Boolean).join(" · ")}</p>
+        {b.headline && <p className="m-0 font-sans text-[14px] font-medium text-ink-2 print:text-black">{b.headline}</p>}
+        {contact.length > 0 && <p className={`m-0 break-words ${meta}`}>{contact.join("  |  ")}</p>}
       </header>
 
-      {resume.summary.text && <p className="m-0 text-[15px] leading-[1.55]">{line(resume.summary)}</p>}
+      {resume.summary.text && (
+        <section className="flex flex-col gap-2">
+          <h2 className={heading}>Summary</h2>
+          <p className="m-0 text-[14.5px] leading-[1.55]">{line(resume.summary)}</p>
+        </section>
+      )}
 
       {resume.roles.length > 0 && (
-        <section className="flex flex-col gap-2.5">
+        <section className="flex flex-col gap-3">
           <h2 className={heading}>Experience</h2>
           {resume.roles.map((r) => {
-            const meta = frame.roles[r.experienceId];
-            if (!meta) return null;
+            const m = frame.roles[r.experienceId];
+            if (!m) return null;
             return (
               <div key={r.experienceId} className="flex flex-col gap-1.5 break-inside-avoid">
-                <div className="flex flex-wrap justify-between gap-x-3 text-[15px]">
-                  <b>{meta.title} · {meta.company}</b>
-                  <span className="font-sans text-[13px] text-muted print:text-black">{[meta.location, meta.dates].filter(Boolean).join(" · ")}</span>
-                </div>
-                <ul className="m-0 flex flex-col gap-1.5 pl-[18px] text-[14.5px] leading-[1.5]">
-                  {r.bullets.map((u) => (
-                    <li key={u.id}>{line(u)}</li>
-                  ))}
-                </ul>
+                {entryHead(m.title, m.dates, [m.company, m.location].filter(Boolean).join(" · "))}
+                {r.bullets.length > 0 && (
+                  <ul className={list}>
+                    {r.bullets.map((u) => (
+                      <li key={u.id}>{line(u)}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
             );
           })}
@@ -76,59 +95,67 @@ export function ResumeSheet({ data, showTags = false, renderUnit }: ResumeSheetP
       )}
 
       {resume.projects.length > 0 && (
-        <section className="flex flex-col gap-2">
+        <section className="flex flex-col gap-3">
           <h2 className={heading}>Projects</h2>
           {resume.projects.map((p) => {
-            const meta = frame.projects[p.projectId];
-            if (!meta) return null;
+            const m = frame.projects[p.projectId];
+            if (!m) return null;
             return (
-              <div key={p.projectId} className="flex flex-col gap-1 break-inside-avoid text-[14.5px]">
-                <b>{meta.name}</b>
-                <ul className="m-0 flex flex-col gap-1 pl-[18px] leading-[1.5]">
-                  {p.bullets.map((u) => (
-                    <li key={u.id}>{line(u)}</li>
-                  ))}
-                </ul>
+              <div key={p.projectId} className="flex flex-col gap-1 break-inside-avoid">
+                {entryHead(m.name, "", m.url)}
+                {p.bullets.length > 0 && (
+                  <ul className={list}>
+                    {p.bullets.map((u) => (
+                      <li key={u.id}>{line(u)}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
             );
           })}
         </section>
       )}
 
-      {resume.skillIds.length > 0 && (
+      {skills.length > 0 && (
         <section className="flex flex-col gap-2">
           <h2 className={heading}>Skills</h2>
-          <p className="m-0 text-[14.5px]">{resume.skillIds.map((id) => frame.skills[id]).filter(Boolean).join(" · ")}</p>
+          <div className="flex flex-col gap-1 text-[14.5px] leading-[1.5]">
+            {skills.map((g) => (
+              <p key={g.group || "all"} className="m-0">
+                {g.group && <b>{g.group}: </b>}
+                {g.names.join(", ")}
+              </p>
+            ))}
+          </div>
         </section>
       )}
 
       {frame.education.length > 0 && (
-        <section className="flex flex-col gap-2">
+        <section className="flex flex-col gap-2.5">
           <h2 className={heading}>Education</h2>
           {frame.education.map((e, i) => (
-            <div key={i} className="flex flex-wrap justify-between gap-x-3 text-[14.5px]">
-              <span>
-                <b>{[e.degree, e.field].filter(Boolean).join(", ")}</b>
-                {e.degree || e.field ? " · " : ""}
-                {e.institution}
-                {e.grade ? ` · ${e.grade}` : ""}
-              </span>
-              <span className="font-sans text-[13px] text-muted print:text-black">{e.dates}</span>
+            <div key={i} className="break-inside-avoid">
+              {entryHead([e.degree, e.field].filter(Boolean).join(", ") || e.institution, e.dates, [e.degree || e.field ? e.institution : "", gradeLabel(e.grade)].filter(Boolean).join(" · "))}
             </div>
           ))}
         </section>
       )}
 
       {frame.certifications.length > 0 && (
-        <section className="flex flex-col gap-2">
+        <section className="flex flex-col gap-2.5">
           <h2 className={heading}>Certifications</h2>
           {frame.certifications.map((c, i) => (
-            <div key={i} className="text-[14.5px]">
-              <b>{c.name}</b>
-              {c.issuer ? ` · ${c.issuer}` : ""}
-              {c.dates ? ` · ${c.dates}` : ""}
+            <div key={i} className="break-inside-avoid">
+              {entryHead(c.name, c.dates, c.issuer)}
             </div>
           ))}
+        </section>
+      )}
+
+      {frame.languages && frame.languages.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className={heading}>Languages</h2>
+          <p className="m-0 text-[14.5px]">{frame.languages.map((l) => (l.level ? `${l.name} (${l.level})` : l.name)).join(", ")}</p>
         </section>
       )}
     </article>

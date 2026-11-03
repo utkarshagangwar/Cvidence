@@ -1,17 +1,25 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { saveProfile } from "@/app/(app)/profile/actions";
+import { improveSectionAction, saveProfile } from "@/app/(app)/profile/actions";
 import { IconButton, TextArea, TextField } from "@/components/ui/Field";
-import { IconDown, IconPlus, IconTrash, IconUp, IconUpload, IconX } from "@/components/ui/icons";
+import { IconDown, IconDownload, IconPlus, IconSparkle, IconTrash, IconUp, IconUpload, IconX } from "@/components/ui/icons";
 import { UndoToast } from "@/components/ui/UndoToast";
-import { scoreProfile } from "@/lib/ats/score";
+import { aiCanFix, scoreProfile, type AtsSection } from "@/lib/ats/score";
+import { downloadResumeDocx } from "@/lib/export/docx";
+import { saveBlob } from "@/lib/export/download";
+import { profileToResume, resumeFileBase } from "@/lib/export/profile-resume";
+import { resumeToMarkdown, resumeToText } from "@/lib/export/text";
 import { LEGACY_STORAGE_KEY, legacyToProfile } from "@/lib/profile/legacy-import";
 import { newId, sourceTags, type ProfileDoc } from "@/lib/profile/schema";
 
 type Save = { kind: "idle" } | { kind: "saving" } | { kind: "saved" } | { kind: "error"; message: string; details?: string[] };
 type Draft = { source: "file" | "legacy"; name: string } | null;
-type Removed = { label: string; restore: () => void } | null;
+type Undo = { message: string; restore: () => void } | null;
+type Fix = { key: AtsSection["key"]; kind: "busy" } | { key: AtsSection["key"]; kind: "note" | "error"; message: string } | null;
+
+/** Common CV levels, strongest first. Older free-text levels still show as their own option. */
+const LANGUAGE_LEVELS = ["Native", "Fluent", "Professional", "Conversational", "Basic"];
 
 function move<T>(list: T[], i: number, by: -1 | 1): T[] {
   const j = i + by;
@@ -26,12 +34,17 @@ export function ProfileEditor({ initial }: { initial: ProfileDoc }) {
   const [saved, setSaved] = useState<ProfileDoc>(initial);
   const [save, setSave] = useState<Save>({ kind: "idle" });
   const [draft, setDraft] = useState<Draft>(null);
-  const [removed, setRemoved] = useState<Removed>(null);
+  const [removed, setRemoved] = useState<Undo>(null);
+  const [fix, setFix] = useState<Fix>(null);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [hasLegacy, setHasLegacy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const removedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const docRef = useRef(doc);
+  useEffect(() => {
+    docRef.current = doc;
+  }, [doc]);
 
   const dirty = useMemo(() => JSON.stringify(doc) !== JSON.stringify(saved), [doc, saved]);
   const ats = useMemo(() => scoreProfile(doc), [doc]);
@@ -57,12 +70,52 @@ export function ProfileEditor({ initial }: { initial: ProfileDoc }) {
     if (save.kind !== "saving") setSave({ kind: "idle" });
   };
 
-  const removeWithUndo = (label: string, before: ProfileDoc, after: ProfileDoc) => {
+  const changeWithUndo = (message: string, before: ProfileDoc, after: ProfileDoc) => {
     setDoc(after);
+    if (save.kind !== "saving") setSave({ kind: "idle" });
     if (removedTimer.current) clearTimeout(removedTimer.current);
-    setRemoved({ label, restore: () => setDoc(before) });
+    setRemoved({ message, restore: () => setDoc(before) });
     removedTimer.current = setTimeout(() => setRemoved(null), 6000);
   };
+  const removeWithUndo = (label: string, before: ProfileDoc, after: ProfileDoc) => changeWithUndo(`Removed ${label}`, before, after);
+
+  // AI rewrite of one low-scoring section. The result lands in the form as an
+  // unsaved change with Undo; nothing is saved until the person presses Save.
+  async function onFix(key: AtsSection["key"]) {
+    if (key !== "summary" && key !== "experience") return;
+    setFix({ key, kind: "busy" });
+    const res = await improveSectionAction(key, docRef.current);
+    const before = docRef.current;
+    if (res.status === "error") {
+      setFix({ key, kind: "error", message: res.message });
+    } else if (res.status === "summary") {
+      changeWithUndo("Rewrote your summary", before, { ...before, basics: { ...before.basics, summary: res.summary } });
+      setFix({ key, kind: "note", message: "Read it through, then save." });
+    } else {
+      const byId = new Map(res.changes.map((c) => [c.bulletId, c.text]));
+      const after = {
+        ...before,
+        experiences: before.experiences.map((e) => ({ ...e, bullets: e.bullets.map((b) => (byId.has(b.id) ? { ...b, text: byId.get(b.id)! } : b)) })),
+      };
+      const n = res.changes.length;
+      if (n > 0) changeWithUndo(`Rewrote ${n} bullet${n === 1 ? "" : "s"}`, before, after);
+      const notes = [
+        n > 0
+          ? "Read them through, then save."
+          : res.kept > 0
+            ? "Every rewrite added a number or name that isn't in your profile, so we kept your bullets as they were."
+            : "The AI found nothing to change in these bullets.",
+        res.kept > 0 && n > 0 ? `${res.kept} kept as they were, because the rewrite changed a fact.` : "",
+        res.more > 0 ? `${res.more} more to go: run it again.` : "",
+      ].filter(Boolean);
+      setFix({ key, kind: n > 0 ? "note" : "error", message: notes.join(" ") });
+    }
+  }
+
+  // Downloads always use the last saved profile, the same one the PDF page loads.
+  const exportData = useMemo(() => profileToResume(saved), [saved]);
+  const fileBase = resumeFileBase(saved.basics.name);
+  const canExport = saved.basics.name.trim().length > 0 || saved.experiences.length > 0;
 
   async function onSave() {
     setSave({ kind: "saving" });
@@ -328,7 +381,21 @@ export function ProfileEditor({ initial }: { initial: ProfileDoc }) {
           {doc.languages.map((l, i) => (
             <div key={i} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-3">
               <TextField label="Language" value={l.name} onChange={(v) => update((d) => ({ ...d, languages: d.languages.map((x, j) => (j === i ? { ...x, name: v } : x)) }))} maxLength={60} />
-              <TextField label="Level" value={l.level} onChange={(v) => update((d) => ({ ...d, languages: d.languages.map((x, j) => (j === i ? { ...x, level: v } : x)) }))} placeholder="e.g. Fluent" maxLength={60} />
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <label htmlFor={`lang-level-${i}`} className="text-[13px] font-medium text-ink-2">Level</label>
+                <select
+                  id={`lang-level-${i}`}
+                  className="field"
+                  value={l.level}
+                  onChange={(e) => update((d) => ({ ...d, languages: d.languages.map((x, j) => (j === i ? { ...x, level: e.target.value } : x)) }))}
+                >
+                  <option value="">Choose a level</option>
+                  {l.level && !LANGUAGE_LEVELS.includes(l.level) && <option value={l.level}>{l.level}</option>}
+                  {LANGUAGE_LEVELS.map((lv) => (
+                    <option key={lv} value={lv}>{lv}</option>
+                  ))}
+                </select>
+              </div>
               <IconButton label={`Remove ${l.name || "language"}`} tone="danger" onClick={() => removeWithUndo(l.name || "language", doc, { ...doc, languages: doc.languages.filter((_, j) => j !== i) })}>
                 <IconTrash />
               </IconButton>
@@ -360,6 +427,29 @@ export function ProfileEditor({ initial }: { initial: ProfileDoc }) {
                   {todo.slice(0, 2).map((c) => (
                     <span key={c.message} className="text-[12px] text-muted">{c.message}</span>
                   ))}
+                  {s.score < 100 && aiCanFix(s.key, doc) && (
+                    <button
+                      type="button"
+                      className="btn mt-0.5 h-8 self-start px-2 text-[12.5px] text-teal hover:text-teal-hover"
+                      onClick={() => onFix(s.key)}
+                      disabled={fix?.kind === "busy"}
+                    >
+                      {fix?.key === s.key && fix.kind === "busy" ? (
+                        <>
+                          <span className="loader-dot" aria-hidden="true" /> Rewriting…
+                        </>
+                      ) : (
+                        <>
+                          <IconSparkle /> Fix with AI · 1 credit
+                        </>
+                      )}
+                    </button>
+                  )}
+                  {fix?.key === s.key && fix.kind !== "busy" && (
+                    <span role={fix.kind === "error" ? "alert" : "status"} className={`text-[12px] ${fix.kind === "error" ? "text-gap-text" : "text-covered-text"}`}>
+                      {fix.message}
+                    </span>
+                  )}
                 </li>
               );
             })}
@@ -382,11 +472,49 @@ export function ProfileEditor({ initial }: { initial: ProfileDoc }) {
             )}
           </div>
         </div>
+
+        <section className="card flex flex-col gap-3 p-5" aria-labelledby="export-h">
+          <div className="flex flex-col gap-1">
+            <h2 id="export-h" className="m-0 text-[17px]">Download resume</h2>
+            <p className="m-0 text-[12px] text-muted">Your whole profile on one ATS-friendly page: one column, standard headings, real text.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" className="btn btn-secondary press" disabled={!canExport} onClick={() => window.open("/print/profile", "_blank", "noopener")}>
+              <IconDownload /> PDF
+            </button>
+            <button type="button" className="btn btn-secondary press" disabled={!canExport} onClick={() => downloadResumeDocx(exportData, `${fileBase}.docx`)}>
+              <IconDownload /> DOCX
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary press"
+              disabled={!canExport}
+              onClick={() => saveBlob(new Blob([resumeToMarkdown(exportData)], { type: "text/markdown;charset=utf-8" }), `${fileBase}.md`)}
+            >
+              <IconDownload /> Markdown
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary press"
+              disabled={!canExport}
+              onClick={() => saveBlob(new Blob([resumeToText(exportData)], { type: "text/plain;charset=utf-8" }), `${fileBase}.txt`)}
+            >
+              <IconDownload /> Text
+            </button>
+          </div>
+          {!canExport ? (
+            <p className="m-0 text-[12px] text-subtle">Add your name and a role, save, then download.</p>
+          ) : dirty || draft ? (
+            <p className="m-0 text-[12px] text-partial-text">Downloads use your last saved version. Save to include your changes.</p>
+          ) : (
+            <p className="m-0 text-[12px] text-subtle">PDF opens a print page: choose “Save as PDF”.</p>
+          )}
+        </section>
       </aside>
 
       {removed && (
         <UndoToast
-          message={`Removed ${removed.label}`}
+          message={removed.message}
           onUndo={() => {
             removed.restore();
             setRemoved(null);
